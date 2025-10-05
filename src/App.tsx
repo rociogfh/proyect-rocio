@@ -7,7 +7,7 @@ function App() {
 
   useEffect(() => {
     // Simula una pequeña carga
-    const timer = setTimeout(() => setReady(true), 3500);
+    const timer = setTimeout(() => setReady(true), 600);
     return () => clearTimeout(timer);
   }, []);
 
