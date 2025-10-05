@@ -1,35 +1,42 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useEffect, useState } from "react";
+import "./App.css";
 
 function App() {
-  const [count, setCount] = useState(0)
+  // Estado para mostrar splash
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    // Simula una pequeña carga
+    const timer = setTimeout(() => setReady(true), 3500);
+    return () => clearTimeout(timer);
+  }, []);
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+    <div className="app">
+      {/* Splash Screen */}
+      {!ready && (
+        <div className="splash">
+          <img src="/icons/icon-192.png" alt="Logo" />
+          <p>Cargando...</p>
+        </div>
+      )}
+
+      {/* App Shell (estructura base) */}
+      {ready && (
+        <>
+          <header className="app-header">Proyecto Rocío Garcia</header>
+
+          <main className="app-content">
+            <h1>Bienvenido 👋</h1>
+            <p>Esta es mi vista inicial (Home) de PWA.</p>
+            <p>Funciona rápido y puede cargarse sin internet.</p>
+          </main>
+
+          <footer className="app-footer">© {new Date().getFullYear()}</footer>
+        </>
+      )}
+    </div>
+  );
 }
 
-export default App
+export default App;

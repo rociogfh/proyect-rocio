@@ -1,2 +1,51 @@
-if(!self.define){let e,s={};const i=(i,r)=>(i=new URL(i+".js",r).href,s[i]||new Promise(s=>{if("document"in self){const e=document.createElement("script");e.src=i,e.onload=s,document.head.appendChild(e)}else e=i,importScripts(i),s()}).then(()=>{let e=s[i];if(!e)throw new Error(`Module ${i} didn’t register its module`);return e}));self.define=(r,t)=>{const n=e||("document"in self?document.currentScript.src:"")||location.href;if(s[n])return;let o={};const c=e=>i(e,n),d={module:{uri:n},exports:o,require:c};s[n]=Promise.all(r.map(e=>d[e]||c(e))).then(e=>(t(...e),o))}}define(["./workbox-915e8d08"],function(e){"use strict";self.addEventListener("message",e=>{e.data&&"SKIP_WAITING"===e.data.type&&self.skipWaiting()}),e.precacheAndRoute([{url:"assets/index-CAl1KfkQ.js",revision:"163e7ed0fbecfaeaa31c198ef9ac5ab7"},{url:"assets/index-D8b4DHJx.css",revision:"0a8decc34fa9ef5715ae1ee8d93e1a7b"},{url:"assets/react-CHdo91hT.svg",revision:"f0402b67b6ce880f65666bb49e841696"},{url:"index.html",revision:"34af81c610da0836bebd75d4d65960fa"},{url:"vite.svg",revision:"8e3a10e157f75ada21ab742c022d5430"}],{ignoreURLParametersMatching:[/^utm_/,/^fbclid$/]})});
-//# sourceMappingURL=sw.js.map
+// Nombre del caché
+const CACHE_NAME = 'app-shell-v1';
+
+// Archivos base del App Shell
+const APP_SHELL = [
+  '/',               
+  '/index.html',
+  '/manifest.json',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  
+  
+];
+
+// Install: precache del App Shell
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+  );
+  self.skipWaiting();
+});
+
+// Activate: limpia versiones viejas
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.map((k) => (k !== CACHE_NAME ? caches.delete(k) : undefined)))
+    )
+  );
+  self.clients.claim();
+});
+
+// Fetch: - Cache-first para lo que está en APP_SHELL
+
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  if (APP_SHELL.includes(url.pathname)) {
+    event.respondWith(caches.match(event.request).then((r) => r || fetch(event.request)));
+    return;
+  }
+
+  event.respondWith(
+    fetch(event.request)
+      .then((res) => {
+        const clone = res.clone();
+        caches.open(CACHE_NAME).then((c) => c.put(event.request, clone));
+        return res;
+      })
+      .catch(() => caches.match(event.request))
+  );
+});
