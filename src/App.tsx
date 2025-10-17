@@ -1,183 +1,230 @@
-// src/App.tsx
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
-
+import { saveTask, getAllTasks, queueToOutbox } from "./db";
 import type { Task } from "./db";
-import { listLocalEntries, saveLocalEntry, queueOutbox } from "./db";
+import { askNotify, subscribePush } from "./push";
 
-import { db } from "./firebase";
-import { collection, addDoc } from "firebase/firestore";
-
-import { askAndGetFcmToken } from "./push-fcm";
-
-const VAPID = import.meta.env.VITE_FCM_VAPID as string | undefined;
+// ✅ Fallback: usa VITE_FCM_VAPID o VITE_VAPID_PUBLIC
+const VAPID =
+  (import.meta.env.VITE_FCM_VAPID as string | undefined) ||
+  (import.meta.env.VITE_VAPID_PUBLIC as string | undefined);
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [priority, setPriority] = useState<"Baja" | "Media" | "Alta">("Media");
-  const [date, setDate] = useState("");
+  const [priority, setPriority] = useState<Task["priority"]>("Media");
+  const [dueDate, setDueDate] = useState("");
   const [online, setOnline] = useState(navigator.onLine);
 
+  /* Cargar tareas y estado online/offline */
   useEffect(() => {
-    (async () => setTasks(await listLocalEntries()))();
-    const up = () => setOnline(true);
-    const down = () => setOnline(false);
-    window.addEventListener("online", up);
-    window.addEventListener("offline", down);
+    getAllTasks().then((data) =>
+      setTasks(data.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0)))
+    );
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
     return () => {
-      window.removeEventListener("online", up);
-      window.removeEventListener("offline", down);
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
     };
   }, []);
 
-  async function handleSubmit(e: React.FormEvent) {
+  /* 🔔 Pedir permiso de notificaciones al iniciar */
+  useEffect(() => {
+    (async () => {
+      try {
+        if (!("Notification" in window)) return;
+        try { await navigator.serviceWorker?.ready; } catch {}
+
+        if (!VAPID) {
+          console.warn("No hay VAPID pública configurada (VITE_FCM_VAPID o VITE_VAPID_PUBLIC).");
+          return;
+        }
+
+        if (Notification.permission === "granted") {
+          await subscribePush(VAPID);
+        } else if (Notification.permission === "default") {
+          const ok = await askNotify();
+          if (ok) {
+            await subscribePush(VAPID);
+          }
+        }
+      } catch (e) {
+        console.warn("Error al solicitar/activar notificaciones:", e);
+      }
+    })();
+  }, []);
+
+  const completed = tasks.filter((t) => t.completed).length;
+  const percent = useMemo(
+    () => (tasks.length ? Math.round((completed / tasks.length) * 100) : 0),
+    [tasks, completed]
+  );
+
+  async function addTask(e: React.FormEvent) {
     e.preventDefault();
-    const payload: Task = {
-      title,
-      description,
+    if (!title.trim()) return;
+
+    const newTask: Task = {
+      title: title.trim(),
+      description: description.trim(),
+      completed: false,
       priority,
-      due: date,
-      createdAt: Date.now(),
+      dueDate: dueDate || undefined,
+      synced: navigator.onLine,
     };
 
-    // 1) Guarda local para que aparezca aunque recargues sin red
-    await saveLocalEntry(payload);
-    setTasks(await listLocalEntries());
+    await saveTask(newTask);
+    setTasks((prev) => [{ ...newTask, id: Date.now() }, ...prev]);
 
-    // 2) Si hay red, guarda en Firestore; si falla, encola
-    if (navigator.onLine) {
-      try {
-        await addDoc(collection(db, "entries"), payload);
-      } catch (e) {
-        console.error("Firestore error -> encola:", e);
-        await queueAndSync(payload);
-      }
-    } else {
-      // 3) Offline: encola y registra Background Sync
-      await queueAndSync(payload);
-    }
-
-    // (Opcional) Pide permiso de push la 1ª vez que el usuario crea algo
-    if (Notification.permission === "default" && VAPID) {
-      try {
-        const token = await askAndGetFcmToken(VAPID);
-        if (token) {
-          console.log("🔑 FCM token:", token);
-          localStorage.setItem("fcmToken", token);
-          // Guarda el token para pruebas (puedes usar tu backend si quieres):
-          await addDoc(collection(db, "devices"), { token, createdAt: Date.now() });
-        }
-      } catch {/* no-op */}
-    }
-
-    // Limpia formulario
     setTitle("");
     setDescription("");
     setPriority("Media");
-    setDate("");
-  }
+    setDueDate("");
 
-  async function queueAndSync(payload: any) {
-    await queueOutbox(payload);
-    const reg = await navigator.serviceWorker.ready;
-
-    // Background Sync si está soportado
-    if ("SyncManager" in window) {
-      const sync = (reg as any).sync as { register?: (tag: string) => Promise<void> } | undefined;
-      if (sync?.register) {
-        try {
-          await sync.register("sync-entries");
-        } catch (err) {
-          console.warn("No se pudo registrar Background Sync:", err);
-        }
-      }
+    if (!navigator.onLine) {
+      await queueToOutbox({ type: "task", payload: newTask });
+      // @ts-ignore - TS no tipa SyncManager
+      const reg = await navigator.serviceWorker.ready;
+      // @ts-ignore
+      reg.sync?.register?.("sync-entries");
+      alert("Guardado offline. Se sincronizará al volver la conexión.");
+    } else {
+      fetch("/api/entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newTask),
+      }).catch(() => {});
     }
   }
 
-  async function enablePush() {
-    if (!VAPID) {
-      alert("Falta VITE_FCM_VAPID en .env");
-      return;
-    }
-    const token = await askAndGetFcmToken(VAPID);
-    if (!token) {
-      alert("Permiso denegado o navegador no soportado");
-      return;
-    }
-
-    console.log("🔑 FCM token:", token);
-    localStorage.setItem("fcmToken", token);
-
-    // Guarda el token en Firestore (o envíalo a tu backend si prefieres)
-    try {
-      await addDoc(collection(db, "devices"), { token, createdAt: Date.now() });
-    } catch {/* no-op */}
-
-    alert("Notificaciones habilitadas ✅ (revisa la consola para ver el token)");
+  function toggleTask(i: number) {
+    const copy = [...tasks];
+    copy[i].completed = !copy[i].completed;
+    setTasks(copy);
+    saveTask(copy[i]);
   }
 
   return (
     <div className="page">
-      <header className="top">
-        <h1>Lista de tareas</h1>
-        <span className={`pill ${online ? "ok" : "bad"}`}>
-          {online ? "Online" : "Offline"}
-        </span>
-      </header>
+      <main className="container">
+        <h1 className="title">Lista de tareas </h1>
+        <p className="subtitle">Progreso: {percent}%</p>
 
-      <section className="card">
-        <h3>Tareas — Agregar nueva</h3>
-        <form onSubmit={handleSubmit} className="form">
-          <input
-            placeholder="Título"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-          />
-          <textarea
-            placeholder="Descripción"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-          <div className="row">
-            <select
-              value={priority}
-              onChange={(e) => setPriority(e.target.value as any)}
-            >
-              <option>Baja</option>
-              <option>Media</option>
-              <option>Alta</option>
-            </select>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-            />
+        <section className="card">
+          <div className="progress">
+            <div className="progress-bar" style={{ width: `${percent}%` }} />
+            <span className="progress-label">{percent}%</span>
           </div>
-          <button type="submit">Guardar tarea</button>
-          <button type="button" className="ghost" onClick={enablePush}>
-            Habilitar notificaciones
-          </button>
-        </form>
-      </section>
 
-      <section className="card">
-        <h3>Tus tareas</h3>
-        <ul className="list">
-          {tasks.map((t) => (
-            <li key={t.id}>
-              <div>
-                <strong>{t.title}</strong>
-                {t.description && <div className="muted">{t.description}</div>}
-              </div>
-              <span className="badge">{t.priority ?? "Media"}</span>
-            </li>
-          ))}
-          {tasks.length === 0 && <p className="muted">Aún no hay tareas.</p>}
-        </ul>
-      </section>
+          <h2 className="section-title">Tareas — Agregar nueva</h2>
+          <form className="form" onSubmit={addTask}>
+            <input
+              className="input"
+              placeholder="Título"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <textarea
+              className="input"
+              placeholder="Descripción"
+              rows={3}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+            <div className="row">
+              <select
+                className="input"
+                value={priority}
+                onChange={(e) =>
+                  setPriority(e.target.value as Task["priority"])
+                }
+              >
+                <option value="Alta">Alta</option>
+                <option value="Media">Media</option>
+                <option value="Baja">Baja</option>
+              </select>
+              <input
+                className="input"
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+              />
+            </div>
+            <div className="nav-row" style={{ marginTop: 10 }}>
+              <button className="primary-btn" type="submit">
+                Guardar tarea
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section className="card list-card">
+          <h2 className="section-title">Tus tareas</h2>
+          {tasks.length === 0 ? (
+            <p className="empty">Aún no hay tareas. Añade tu primera tarea arriba.</p>
+          ) : (
+            <ul className="list">
+              {tasks.map((t, i) => (
+                <li key={(t.id ?? i)} className="item">
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={t.completed}
+                      onChange={() => toggleTask(i)}
+                    />
+                    <span />
+                  </label>
+                  <div className="item-body">
+                    <div className="item-head">
+                      <h3 className={`item-title ${t.completed ? "done" : ""}`}>
+                        {t.title}
+                      </h3>
+                      <span
+                        className={`pill ${
+                          t.priority === "Alta"
+                            ? "pill-red"
+                            : t.priority === "Media"
+                            ? "pill-amber"
+                            : "pill-green"
+                        }`}
+                      >
+                        {t.priority}
+                      </span>
+                    </div>
+                    {t.description && (
+                      <p className="item-desc">{t.description}</p>
+                    )}
+                    <div className="item-meta">
+                      {t.dueDate && <span>Vence: {t.dueDate}</span>}{" "}
+                      {t.synced && <span>✅ Sincronizado</span>}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </main>
+
+      {/* Indicador conexión */}
+      <div
+        style={{
+          position: "fixed",
+          bottom: 12,
+          right: 12,
+          background: online ? "#22c55e" : "#ef4444",
+          color: "#fff",
+          padding: "6px 12px",
+          borderRadius: 999,
+          boxShadow: "0 6px 16px rgba(0,0,0,.15)",
+        }}
+      >
+        {online ? "Online" : "Offline"}
+      </div>
     </div>
   );
 }
