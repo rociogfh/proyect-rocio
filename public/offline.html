@@ -1,0 +1,40 @@
+<!-- public/offline.html -->
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sin conexión</title>
+  <style>
+    :root { color-scheme: light dark }
+    *{box-sizing:border-box} body{
+      margin:0;min-height:100dvh;display:grid;place-items:center;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
+      background: linear-gradient(180deg,#e6f0ff,#e9f6ff);
+    }
+    .card{width:min(700px,92%);background:#fff;border-radius:18px;padding:28px;
+      box-shadow:0 10px 30px rgba(0,0,0,.08)}
+    h1{margin:0 0 10px} p{margin:0 0 14px;color:#5f6b7a}
+    button{padding:10px 16px;border-radius:999px;border:1px solid #cfd7e3;background:#fff;cursor:pointer}
+    .primary{background:#6c4ff6;color:#fff;border-color:transparent}
+    .muted{font-size:13px;color:#8a94a6;margin-top:8px}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Estás offline </h1>
+    <p>No pudimos cargar esta ruta. Vuelve al inicio o reintenta cuando tengas internet.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="primary" onclick="location.href='/'">Ir al inicio</button>
+      <button onclick="location.reload()">Reintentar</button>
+    </div>
+
+  </main>
+  <script>
+    // Cuando vuelva la red, redirige a la misma ruta
+    function goOnline(){ location.reload() }
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', ()=>{});
+  </script>
+</body>
+</html>
